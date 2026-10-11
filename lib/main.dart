@@ -52,7 +52,7 @@ class _KariyerAppState extends State<KariyerApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Eşleş – Kamu İlanları ve KPSS',
+      title: 'Eşleş',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),

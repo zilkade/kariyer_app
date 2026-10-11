@@ -4,18 +4,20 @@ import '../theme/app_theme.dart';
 /// Ana ekrandaki arama + filtre çubuğu.
 ///
 /// - Arama: debounce'lu (yazarken gecikmeli tetikler)
-/// - Filtreler: Yeni / KPSS / Favoriler chip'leri
+/// - Filtreler: Yeni / KPSS / Favoriler / İncelediklerim
 /// - Aktif filtreler: temizle butonu görünür
 class FiltreCubugu extends StatefulWidget {
   final String arama;
   final bool sadeceYeni;
   final bool sadeceKpss;
   final bool sadeceFavori;
+  final bool sadeceIncelenen;
 
   final ValueChanged<String> onAramaChanged;
   final ValueChanged<bool> onYeniChanged;
   final ValueChanged<bool> onKpssChanged;
   final ValueChanged<bool> onFavoriChanged;
+  final ValueChanged<bool> onIncelenenChanged;
   final VoidCallback onTemizle;
 
   const FiltreCubugu({
@@ -24,10 +26,12 @@ class FiltreCubugu extends StatefulWidget {
     required this.sadeceYeni,
     required this.sadeceKpss,
     required this.sadeceFavori,
+    required this.sadeceIncelenen,
     required this.onAramaChanged,
     required this.onYeniChanged,
     required this.onKpssChanged,
     required this.onFavoriChanged,
+    required this.onIncelenenChanged,
     required this.onTemizle,
   });
 
@@ -54,7 +58,8 @@ class _FiltreCubuguState extends State<FiltreCubugu> {
       widget.arama.isNotEmpty ||
       widget.sadeceYeni ||
       widget.sadeceKpss ||
-      widget.sadeceFavori;
+      widget.sadeceFavori ||
+      widget.sadeceIncelenen;
 
   @override
   Widget build(BuildContext context) {
@@ -129,6 +134,14 @@ class _FiltreCubuguState extends State<FiltreCubugu> {
                         secili: widget.sadeceFavori,
                         onTap: () =>
                             widget.onFavoriChanged(!widget.sadeceFavori),
+                      ),
+                      const SizedBox(width: AppSpacing.sm),
+                      _FiltreChip(
+                        label: 'İncelediklerim',
+                        icon: Icons.history_rounded,
+                        secili: widget.sadeceIncelenen,
+                        onTap: () => widget.onIncelenenChanged(
+                            !widget.sadeceIncelenen),
                       ),
                     ],
                   ),

@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import '../models/ilan.dart';
 import '../services/api_service.dart';
+import '../services/kullanici_verisi.dart';
 import '../theme/app_theme.dart';
-import '../widgets/ilan_karti.dart';
 import '../widgets/filtre_cubugu.dart';
+import '../widgets/ilan_karti.dart';
 import 'ilan_detay.dart';
 
 class IlanListesiEkrani extends StatefulWidget {
@@ -23,8 +24,8 @@ class IlanListesiEkrani extends StatefulWidget {
 class _IlanListesiEkraniState extends State<IlanListesiEkrani> {
   // ---- Veri ----
   List<Ilan> _ilanlar = [];
-  bool _ilkYukleme = true;      // İlk yükleme (skeleton)
-  bool _yenileniyor = false;    // Arka plan yenileme (küçük gösterge)
+  bool _ilkYukleme = true;
+  bool _yenileniyor = false;
   String? _hata;
 
   // ---- Filtreler ----
@@ -32,6 +33,9 @@ class _IlanListesiEkraniState extends State<IlanListesiEkrani> {
   bool _sadeceYeni = false;
   bool _sadeceKpss = false;
   bool _sadeceFavori = false;
+  bool _sadeceIncelenen = false;
+  Set<String> _favoriIds = {};
+  Set<String> _okunanIds = {};
 
   // ---- Debounce ----
   int _aramaToken = 0;
@@ -39,7 +43,18 @@ class _IlanListesiEkraniState extends State<IlanListesiEkrani> {
   @override
   void initState() {
     super.initState();
+    _yerelVerileriYukle();
     _yukle(ilkMi: true);
+  }
+
+  Future<void> _yerelVerileriYukle() async {
+    final fav = await KullaniciVerisi.favoriler();
+    final oku = await KullaniciVerisi.incelenenler();
+    if (!mounted) return;
+    setState(() {
+      _favoriIds = fav;
+      _okunanIds = oku;
+    });
   }
 
   // ============================================================
@@ -60,12 +75,24 @@ class _IlanListesiEkraniState extends State<IlanListesiEkrani> {
         arama: _arama,
         sadeceYeni: _sadeceYeni,
         sadeceKpss: _sadeceKpss,
-        sadeceFavori: _sadeceFavori,
       );
+
+      final fav = await KullaniciVerisi.favoriler();
+      final oku = await KullaniciVerisi.incelenenler();
+
+      var filtreli = liste;
+      if (_sadeceFavori) {
+        filtreli = filtreli.where((i) => fav.contains(i.id)).toList();
+      }
+      if (_sadeceIncelenen) {
+        filtreli = filtreli.where((i) => oku.contains(i.id)).toList();
+      }
 
       if (!mounted) return;
       setState(() {
-        _ilanlar = liste;
+        _ilanlar = filtreli;
+        _favoriIds = fav;
+        _okunanIds = oku;
         _ilkYukleme = false;
         _yenileniyor = false;
       });
@@ -79,10 +106,11 @@ class _IlanListesiEkraniState extends State<IlanListesiEkrani> {
     }
   }
 
-  /// Teknik hatayı kullanıcı dostu mesaja çevirir.
   String _kullaniciDostuHata(Object e) {
     final s = e.toString().toLowerCase();
-    if (s.contains('socket') || s.contains('connection') || s.contains('timeout')) {
+    if (s.contains('socket') ||
+        s.contains('connection') ||
+        s.contains('timeout')) {
       return 'İnternet bağlantısı kurulamadı.\nLütfen bağlantınızı kontrol edip tekrar deneyin.';
     }
     if (s.contains('500') || s.contains('502') || s.contains('503')) {
@@ -101,10 +129,9 @@ class _IlanListesiEkraniState extends State<IlanListesiEkrani> {
     _arama = v;
     final token = ++_aramaToken;
 
-    // 500ms bekle, hâlâ aynı token ise yükle
     Future.delayed(const Duration(milliseconds: 500), () {
       if (!mounted) return;
-      if (token != _aramaToken) return;   // daha yeni bir arama var
+      if (token != _aramaToken) return;
       _yukle();
     });
   }
@@ -127,68 +154,54 @@ class _IlanListesiEkraniState extends State<IlanListesiEkrani> {
     _yukle();
   }
 
+  void _incelenenDegistir(bool v) {
+    setState(() => _sadeceIncelenen = v);
+    _yukle();
+  }
+
   void _filtreleriTemizle() {
     setState(() {
       _arama = '';
       _sadeceYeni = false;
       _sadeceKpss = false;
       _sadeceFavori = false;
+      _sadeceIncelenen = false;
     });
     _yukle();
   }
 
   // ============================================================
-  // FAVORİ — ANINDA GÜNCELLE (liste yenilenmez)
+  // FAVORİ TOGGLE
   // ============================================================
   Future<void> _favoriToggle(Ilan ilan) async {
-    final eskiDeger = ilan.favoriMi;
-
-    // Optimistic update — anında UI'da göster
-    final yeniListe = _ilanlar.map((i) {
-      if (i.id == ilan.id) {
-        return Ilan(
-          id: i.id,
-          kurum: i.kurum,
-          baslik: i.baslik,
-          tarihIso: i.tarihIso,
-          bitIso: i.bitIso,
-          kpss: i.kpss,
-          kpssTurleri: i.kpssTurleri,
-          favori: eskiDeger ? 0 : 1,
-          yeni: i.yeni,
-          aktif: i.aktif,
-          link: i.link,
-          resim: i.resim,
-          notMetni: i.notMetni,
-          tarihGoster: i.tarihGoster,
-          bitGoster: i.bitGoster,
-          kalanGun: i.kalanGun,
-          kpssGoster: i.kpssGoster,
-        );
-      }
-      return i;
-    }).toList();
-
-    setState(() => _ilanlar = yeniListe);
-
-    // Sunucuya gönder
-    final ok = await ApiService.favoriDegistir(ilan.id);
+    final yeniDurum = await KullaniciVerisi.favoriDegistir(ilan.id);
 
     if (!mounted) return;
 
-    if (!ok) {
-      // Hata → eski hâline döndür
-      setState(() => _ilanlar = _ilanlar);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Favori güncellenemedi'),
-          duration: Duration(seconds: 2),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      // Basit geri alma: listeyi yeniden yükle
-      _yukle();
+    final yeniSet = Set<String>.from(_favoriIds);
+    if (yeniDurum) {
+      yeniSet.add(ilan.id);
+    } else {
+      yeniSet.remove(ilan.id);
     }
+
+    setState(() {
+      _favoriIds = yeniSet;
+
+      if (_sadeceFavori && !yeniDurum) {
+        _ilanlar = _ilanlar.where((i) => i.id != ilan.id).toList();
+      }
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          yeniDurum ? '⭐ Favorilere eklendi' : 'Favorilerden çıkarıldı',
+        ),
+        duration: const Duration(seconds: 1),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   // ============================================================
@@ -199,8 +212,10 @@ class _IlanListesiEkraniState extends State<IlanListesiEkrani> {
       context,
       MaterialPageRoute(builder: (_) => IlanDetayEkrani(ilan: ilan)),
     );
-    // Geri dönünce favori değişmiş olabilir → sessizce yenile
-    if (mounted) _yukle();
+    if (mounted) {
+      await _yerelVerileriYukle();
+      _yukle();
+    }
   }
 
   // ============================================================
@@ -212,32 +227,32 @@ class _IlanListesiEkraniState extends State<IlanListesiEkrani> {
       appBar: _appBar(context),
       body: Column(
         children: [
-          // ---- FİLTRE ÇUBUĞU ----
           Padding(
             padding: const EdgeInsets.fromLTRB(
-              AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.sm,
+              AppSpacing.md,
+              AppSpacing.md,
+              AppSpacing.md,
+              AppSpacing.sm,
             ),
             child: FiltreCubugu(
               arama: _arama,
               sadeceYeni: _sadeceYeni,
               sadeceKpss: _sadeceKpss,
               sadeceFavori: _sadeceFavori,
+              sadeceIncelenen: _sadeceIncelenen,
               onAramaChanged: _aramaDegistir,
               onYeniChanged: _yeniDegistir,
               onKpssChanged: _kpssDegistir,
               onFavoriChanged: _favoriDegistir,
+              onIncelenenChanged: _incelenenDegistir,
               onTemizle: _filtreleriTemizle,
             ),
           ),
-
-          // ---- YENİLENİYOR GÖSTERGESİ ----
           if (_yenileniyor)
             const Padding(
               padding: EdgeInsets.only(top: AppSpacing.xs),
               child: LinearProgressIndicator(minHeight: 2),
             ),
-
-          // ---- LİSTE / DURUM ----
           Expanded(child: _govde(context)),
         ],
       ),
@@ -249,10 +264,9 @@ class _IlanListesiEkraniState extends State<IlanListesiEkrani> {
   // ============================================================
   PreferredSizeWidget _appBar(BuildContext context) {
     return AppBar(
-            title: Row(
+      title: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // ---- LOGO ----
           Container(
             width: 36,
             height: 36,
@@ -273,7 +287,7 @@ class _IlanListesiEkraniState extends State<IlanListesiEkrani> {
               child: Image.asset(
                 'assets/images/image.png',
                 fit: BoxFit.contain,
-                errorBuilder: (_, __, ___) => const Icon(
+                errorBuilder: (_, _, _) => const Icon(
                   Icons.check_circle,
                   color: Color(0xFF2563EB),
                   size: 24,
@@ -282,8 +296,7 @@ class _IlanListesiEkraniState extends State<IlanListesiEkrani> {
             ),
           ),
           const SizedBox(width: 10),
-          // ---- YAZI ----
-          const Text('Eşleş – Kamu İlanları ve KPSS'),
+          const Text('Eşleş'),
         ],
       ),
       actions: [
@@ -340,12 +353,10 @@ class _IlanListesiEkraniState extends State<IlanListesiEkrani> {
   // GÖVDE
   // ============================================================
   Widget _govde(BuildContext context) {
-    // 1) İlk yükleme
     if (_ilkYukleme) {
       return _YuklemeSkeleton();
     }
 
-    // 2) Hata
     if (_hata != null) {
       return _HataEkrani(
         mesaj: _hata!,
@@ -353,12 +364,12 @@ class _IlanListesiEkraniState extends State<IlanListesiEkrani> {
       );
     }
 
-    // 3) Boş liste
     if (_ilanlar.isEmpty) {
       final filtreVar = _arama.isNotEmpty ||
           _sadeceYeni ||
           _sadeceKpss ||
-          _sadeceFavori;
+          _sadeceFavori ||
+          _sadeceIncelenen;
 
       return _BosEkrani(
         filtreVar: filtreVar,
@@ -366,13 +377,15 @@ class _IlanListesiEkraniState extends State<IlanListesiEkrani> {
       );
     }
 
-    // 4) Liste
     return RefreshIndicator(
       onRefresh: () => _yukle(),
       color: AppColors.mavi,
       child: ListView.separated(
         padding: const EdgeInsets.fromLTRB(
-          AppSpacing.md, 0, AppSpacing.md, AppSpacing.xl,
+          AppSpacing.md,
+          0,
+          AppSpacing.md,
+          AppSpacing.xl,
         ),
         itemCount: _ilanlar.length,
         separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.sm),
@@ -382,6 +395,8 @@ class _IlanListesiEkraniState extends State<IlanListesiEkrani> {
             ilan: ilan,
             onTap: () => _detayaGit(ilan),
             onFavori: () => _favoriToggle(ilan),
+            favoriMi: _favoriIds.contains(ilan.id),
+            incelendi: _okunanIds.contains(ilan.id),
           );
         },
       ),
@@ -558,7 +573,8 @@ class _BosEkrani extends StatelessWidget {
                   foregroundColor: AppColors.mavi,
                   side: const BorderSide(color: AppColors.mavi),
                   padding: const EdgeInsets.symmetric(
-                    horizontal: AppSpacing.xl, vertical: AppSpacing.md,
+                    horizontal: AppSpacing.xl,
+                    vertical: AppSpacing.md,
                   ),
                 ),
               ),

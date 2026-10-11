@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../models/ilan.dart';
 import '../services/api_service.dart';
+import '../services/kullanici_verisi.dart';
 import '../theme/app_theme.dart';
 
 class IlanDetayEkrani extends StatefulWidget {
@@ -21,15 +22,20 @@ class _IlanDetayEkraniState extends State<IlanDetayEkrani> {
   @override
   void initState() {
     super.initState();
-    _favori = widget.ilan.favoriMi;
+    _yerelVerileriYukle();
     _detayYukle();
-    _okunduIsaretle();
+    _incelendiKaydet();
   }
 
-  /// Bu ilan açıldığında okundu olarak işaretle
-  Future<void> _okunduIsaretle() async {
-    if (!widget.ilan.yeniMi) return; // zaten okunmuşsa gönderme
-    await ApiService.okunduIsaretle(widget.ilan.id);
+  Future<void> _yerelVerileriYukle() async {
+    final fav = await KullaniciVerisi.favoriMi(widget.ilan.id);
+    if (!mounted) return;
+    setState(() => _favori = fav);
+  }
+
+  /// Bu ilan açıldığında cihazda "incelendi" olarak işaretle
+  Future<void> _incelendiKaydet() async {
+    await KullaniciVerisi.incelendiIsaretle(widget.ilan.id);
   }
 
   Future<void> _detayYukle() async {
@@ -70,32 +76,21 @@ class _IlanDetayEkraniState extends State<IlanDetayEkrani> {
   }
 
   Future<void> _favoriToggle() async {
-    final eski = _favori;
-    setState(() => _favori = !eski);
+    final yeniDurum = await KullaniciVerisi.favoriDegistir(widget.ilan.id);
 
-    final ok = await ApiService.favoriDegistir(widget.ilan.id);
     if (!mounted) return;
 
-    if (!ok) {
-      setState(() => _favori = eski);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Favori güncellenemedi'),
-          duration: Duration(seconds: 2),
-          behavior: SnackBarBehavior.floating,
+    setState(() => _favori = yeniDurum);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          yeniDurum ? '⭐ Favorilere eklendi' : 'Favorilerden çıkarıldı',
         ),
-      );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            _favori ? '⭐ Favorilere eklendi' : 'Favorilerden çıkarıldı',
-          ),
-          duration: const Duration(seconds: 1),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }
+        duration: const Duration(seconds: 1),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   @override
@@ -149,24 +144,6 @@ class _IlanDetayEkraniState extends State<IlanDetayEkrani> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (widget.ilan.yeniMi)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            margin: const EdgeInsets.only(bottom: AppSpacing.md),
-            decoration: BoxDecoration(
-              color: AppColors.maviCokAcik,
-              borderRadius: BorderRadius.circular(AppRadius.sm),
-            ),
-            child: const Text(
-              'YENİ',
-              style: TextStyle(
-                fontSize: 11,
-                color: AppColors.maviKoyu,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 0.5,
-              ),
-            ),
-          ),
         Text(
           widget.ilan.kurum.isEmpty ? 'Kurum belirtilmemiş' : widget.ilan.kurum,
           style: AppText.tiny.copyWith(
@@ -296,12 +273,23 @@ class _IlanDetayEkraniState extends State<IlanDetayEkrani> {
     final basvuru = _detay?['basvuru_durumu'] as String?;
     if (basvuru == null || basvuru.isEmpty) return const SizedBox.shrink();
 
+    final koyu = Theme.of(context).brightness == Brightness.dark;
+
+    // Koyu temada farklı renk paleti — göz yormayan
+    final bg = koyu
+        ? AppColors.mavi.withValues(alpha: 0.15)
+        : AppColors.maviCokAcik.withValues(alpha: 0.5);
+    final borderRenk = koyu
+        ? AppColors.mavi.withValues(alpha: 0.4)
+        : AppColors.maviCokAcik;
+    final metinRenk = koyu ? AppColors.maviAcik : AppColors.maviKoyu;
+
     return Container(
       padding: const EdgeInsets.all(AppSpacing.lg),
       decoration: BoxDecoration(
-        color: AppColors.maviCokAcik.withValues(alpha: 0.5),
+        color: bg,
         borderRadius: BorderRadius.circular(AppRadius.md),
-        border: Border.all(color: AppColors.maviCokAcik),
+        border: Border.all(color: borderRenk),
       ),
       child: Row(
         children: [
@@ -322,8 +310,9 @@ class _IlanDetayEkraniState extends State<IlanDetayEkrani> {
             child: Text(
               basvuru,
               style: AppText.body.copyWith(
-                color: AppColors.maviKoyu,
+                color: metinRenk,
                 fontWeight: FontWeight.w600,
+                height: 1.5,
               ),
             ),
           ),
@@ -524,22 +513,18 @@ class _IlanDetayEkraniState extends State<IlanDetayEkrani> {
           String metin = govde['ilanMetni'].toString();
 
           // ---- 1) ÖZEL TAG'LER — İÇERİĞİ KORU ----
-          // [url=...]text[/url] → text
           metin = metin.replaceAll(
             RegExp(r'\[url=[^\]]*\]([^\[]*)\[/url\]', caseSensitive: false),
             r'$1',
           );
-          // [url]url[/url] → url
           metin = metin.replaceAll(
             RegExp(r'\[url\]([^\[]*)\[/url\]', caseSensitive: false),
             r'$1',
           );
-          // [img]url[/img] → url
           metin = metin.replaceAll(
             RegExp(r'\[img\]([^\[]*)\[/img\]', caseSensitive: false),
             r'$1',
           );
-          // [email]mail[/email] → mail
           metin = metin.replaceAll(
             RegExp(r'\[email\]([^\[]*)\[/email\]', caseSensitive: false),
             r'$1',
@@ -549,8 +534,6 @@ class _IlanDetayEkraniState extends State<IlanDetayEkrani> {
           metin = metin.replaceAll('[*]', '•');
 
           // ---- 3) KALAN TÜM BBCODE TAG'LERİ (catch-all) ----
-          // Yakalar: [b], [/b], [color=red], [/color], [size=14pt], [/size],
-          //          [font=...], [/font], [justify], [/justify], [list], [/list]
           metin = metin.replaceAll(
             RegExp(r'\[/?[a-zA-Z][^\]]*\]', caseSensitive: false),
             '',
@@ -568,7 +551,7 @@ class _IlanDetayEkraniState extends State<IlanDetayEkrani> {
               .replaceAll('&lt;', '<')
               .replaceAll('&gt;', '>');
 
-          // ---- 6) HTML NUMERIC ENTITY'LER (ondalık + hex) ----
+          // ---- 6) HTML NUMERIC ENTITY'LER ----
           metin = metin.replaceAllMapped(
             RegExp(r'&#(\d+);'),
             (m) => String.fromCharCode(int.parse(m.group(1)!)),
@@ -597,7 +580,6 @@ class _IlanDetayEkraniState extends State<IlanDetayEkrani> {
     final koyu = Theme.of(context).brightness == Brightness.dark;
     final satirlar = metin.split('\n');
 
-    // Üst başlık bloğunu ayır (ilk boş satıra kadar, en fazla 10 satır)
     int baslikSonu = -1;
     for (int i = 0; i < satirlar.length && i < 10; i++) {
       if (satirlar[i].trim().isEmpty) {
@@ -619,7 +601,6 @@ class _IlanDetayEkraniState extends State<IlanDetayEkrani> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // -------- ÜST BAŞLIK KARTI --------
         if (baslikSatirlari.isNotEmpty)
           Container(
             width: double.infinity,
@@ -654,8 +635,6 @@ class _IlanDetayEkraniState extends State<IlanDetayEkrani> {
               }).toList(),
             ),
           ),
-
-        // -------- GÖVDE --------
         ..._govdeRender(context, govdeSatirlari),
       ],
     );
@@ -669,43 +648,36 @@ class _IlanDetayEkraniState extends State<IlanDetayEkrani> {
       final ham = satirlar[i];
       final temiz = ham.trim();
 
-      // Boş satır
       if (temiz.isEmpty) {
         widgetlar.add(const SizedBox(height: AppSpacing.lg));
         continue;
       }
 
-      // 1) BÜYÜK BAŞLIK (I., A., TAMAMEN BÜYÜK HARF)
       if (_baslikMi(temiz)) {
         widgetlar.add(_buyukBaslik(context, temiz));
         continue;
       }
 
-      // 2) ANAHTAR : DEĞER (KPSS Taban Puanı: 80)
       if (_anahtarDegerMi(temiz)) {
         widgetlar.add(_anahtarDeger(context, temiz));
         continue;
       }
 
-      // 3) Numaralı madde (1., 2., 3.)
       if (RegExp(r'^\d+\s*[\.\)]\s+\S').hasMatch(temiz) && temiz.length > 3) {
         widgetlar.add(_numaraliMadde(context, temiz));
         continue;
       }
 
-      // 4) Harfli madde (a), b), c))
       if (RegExp(r'^[a-zçğıöşüA-ZÇĞİÖŞÜ][\.\)]\s+\S').hasMatch(temiz)) {
         widgetlar.add(_harfliMadde(context, temiz));
         continue;
       }
 
-      // 5) Tire / bullet
       if (temiz.startsWith('- ') || temiz.startsWith('• ')) {
         widgetlar.add(_tireMadde(context, temiz.substring(2)));
         continue;
       }
 
-      // 6) Normal paragraf
       widgetlar.add(Padding(
         padding: const EdgeInsets.only(bottom: AppSpacing.sm),
         child: SelectableText(
@@ -721,20 +693,16 @@ class _IlanDetayEkraniState extends State<IlanDetayEkrani> {
     return widgetlar;
   }
 
-  // ---- BAŞLIK TESPİT ----
   bool _baslikMi(String satir) {
     if (satir.length > 100) return false;
 
-    // Roma rakamı: I., II., III., IV., V., VI., VII., VIII., IX., X.
     if (RegExp(r'^(I|II|III|IV|V|VI|VII|VIII|IX|X)\s*[\.\)]\s+')
         .hasMatch(satir)) {
       return true;
     }
-    // Harf başlık: A., B., C., D., E. (BÜYÜK harf + BÜYÜK devam)
     if (RegExp(r'^[A-ZÇĞİÖŞÜ]\s*[\.\)]\s+[A-ZÇĞİÖŞÜ]').hasMatch(satir)) {
       return true;
     }
-    // Tamamen BÜYÜK harfli ve kısa satır (rakamla başlamasın)
     if (satir.length < 60 &&
         satir == satir.toUpperCase() &&
         RegExp(r'[A-ZÇĞİÖŞÜ]{3,}').hasMatch(satir) &&
@@ -744,19 +712,16 @@ class _IlanDetayEkraniState extends State<IlanDetayEkrani> {
     return false;
   }
 
-  // ---- ANAHTAR : DEĞER ----
   bool _anahtarDegerMi(String satir) {
     final m = RegExp(r'^([^:]{2,45}):\s*(.+)$').firstMatch(satir);
     if (m == null) return false;
 
     final anahtar = m.group(1)!;
     if (anahtar.length < 3) return false;
-    // Tarih/saat pattern (12.10.2026 10:00) — anahtar değil
     if (RegExp(r'\d{1,2}[\.\/]\d{1,2}').hasMatch(anahtar)) return false;
     return true;
   }
 
-  // ---- WIDGET ÜRETİCİLERİ ----
   Widget _buyukBaslik(BuildContext context, String satir) {
     final scheme = Theme.of(context).colorScheme;
     final koyu = Theme.of(context).brightness == Brightness.dark;

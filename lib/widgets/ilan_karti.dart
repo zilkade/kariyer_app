@@ -12,12 +12,16 @@ class IlanKarti extends StatelessWidget {
   final Ilan ilan;
   final VoidCallback onTap;
   final VoidCallback onFavori;
+  final bool favoriMi;
+  final bool incelendi;
 
   const IlanKarti({
     super.key,
     required this.ilan,
     required this.onTap,
     required this.onFavori,
+    this.favoriMi = false,
+    this.incelendi = false,
   });
 
   @override
@@ -26,7 +30,8 @@ class IlanKarti extends StatelessWidget {
     final koyu = Theme.of(context).brightness == Brightness.dark;
 
     // Okunmuş ilanlar için soluk görünüm
-    final yeniMi = ilan.yeniMi;
+    // Sadece cihaz bazlı: kullanıcı bu ilanı incelemediyse yenidir
+    final yeniMi = !incelendi;
     final cardBg = yeniMi
         ? scheme.surface
         : (koyu
@@ -67,7 +72,7 @@ class IlanKarti extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  if (ilan.yeniMi) ...[
+                  if (!incelendi) ...[
                     const SizedBox(width: AppSpacing.sm),
                     _Badge(
                       text: 'YENİ',
@@ -77,7 +82,7 @@ class IlanKarti extends StatelessWidget {
                   ],
                   const SizedBox(width: AppSpacing.xs),
                   _FavoriButon(
-                    aktif: ilan.favoriMi,
+                    aktif: favoriMi,
                     onTap: onFavori,
                   ),
                 ],
