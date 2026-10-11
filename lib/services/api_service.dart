@@ -70,4 +70,14 @@ class ApiService {
     final List<dynamic> data = json.decode(utf8.decode(resp.bodyBytes));
     return data.map((e) => e.toString()).toList();
   }
+  
+  /// İlanı okundu olarak işaretle (sessizce çalışır)
+  static Future<void> okunduIsaretle(String id) async {
+    try {
+      final uri = Uri.parse('$baseUrl/ilan/$id/okundu');
+      await http.post(uri).timeout(const Duration(seconds: 10));
+    } catch (_) {
+      // Sessizce geç — kritik değil
+    }
+  }
 }

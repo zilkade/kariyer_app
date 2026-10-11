@@ -1,35 +1,57 @@
 import 'package:flutter/material.dart';
 import '../models/ilan.dart';
 import '../services/api_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/ilan_karti.dart';
+import '../widgets/filtre_cubugu.dart';
 import 'ilan_detay.dart';
 
 class IlanListesiEkrani extends StatefulWidget {
-  const IlanListesiEkrani({super.key});
+  final Future<void> Function(ThemeMode) onTemaDegistir;
+  final ThemeMode mevcutTema;
+
+  const IlanListesiEkrani({
+    super.key,
+    required this.onTemaDegistir,
+    required this.mevcutTema,
+  });
 
   @override
   State<IlanListesiEkrani> createState() => _IlanListesiEkraniState();
 }
 
 class _IlanListesiEkraniState extends State<IlanListesiEkrani> {
+  // ---- Veri ----
   List<Ilan> _ilanlar = [];
-  bool _yukleniyor = true;
+  bool _ilkYukleme = true;      // İlk yükleme (skeleton)
+  bool _yenileniyor = false;    // Arka plan yenileme (küçük gösterge)
   String? _hata;
+
+  // ---- Filtreler ----
   String _arama = '';
   bool _sadeceYeni = false;
   bool _sadeceKpss = false;
   bool _sadeceFavori = false;
 
-  final TextEditingController _aramaCtrl = TextEditingController();
+  // ---- Debounce ----
+  int _aramaToken = 0;
 
   @override
   void initState() {
     super.initState();
-    _yukle();
+    _yukle(ilkMi: true);
   }
 
-  Future<void> _yukle() async {
+  // ============================================================
+  // VERİ YÜKLEME
+  // ============================================================
+  Future<void> _yukle({bool ilkMi = false}) async {
     setState(() {
-      _yukleniyor = true;
+      if (ilkMi) {
+        _ilkYukleme = true;
+      } else {
+        _yenileniyor = true;
+      }
       _hata = null;
     });
 
@@ -44,279 +66,505 @@ class _IlanListesiEkraniState extends State<IlanListesiEkrani> {
       if (!mounted) return;
       setState(() {
         _ilanlar = liste;
-        _yukleniyor = false;
+        _ilkYukleme = false;
+        _yenileniyor = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _hata = 'Bağlantı hatası: $e';
-        _yukleniyor = false;
+        _hata = _kullaniciDostuHata(e);
+        _ilkYukleme = false;
+        _yenileniyor = false;
       });
     }
   }
 
-  Future<void> _favoriDegistir(Ilan ilan) async {
+  /// Teknik hatayı kullanıcı dostu mesaja çevirir.
+  String _kullaniciDostuHata(Object e) {
+    final s = e.toString().toLowerCase();
+    if (s.contains('socket') || s.contains('connection') || s.contains('timeout')) {
+      return 'İnternet bağlantısı kurulamadı.\nLütfen bağlantınızı kontrol edip tekrar deneyin.';
+    }
+    if (s.contains('500') || s.contains('502') || s.contains('503')) {
+      return 'Sunucu şu an yanıt vermiyor.\nBirkaç dakika sonra tekrar deneyin.';
+    }
+    if (s.contains('404')) {
+      return 'Aradığınız veriler bulunamadı.';
+    }
+    return 'Beklenmeyen bir hata oluştu.\nLütfen tekrar deneyin.';
+  }
+
+  // ============================================================
+  // ARAMA — DEBOUNCE
+  // ============================================================
+  void _aramaDegistir(String v) {
+    _arama = v;
+    final token = ++_aramaToken;
+
+    // 500ms bekle, hâlâ aynı token ise yükle
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (!mounted) return;
+      if (token != _aramaToken) return;   // daha yeni bir arama var
+      _yukle();
+    });
+  }
+
+  // ============================================================
+  // FİLTRE DEĞİŞİKLİKLERİ
+  // ============================================================
+  void _yeniDegistir(bool v) {
+    setState(() => _sadeceYeni = v);
+    _yukle();
+  }
+
+  void _kpssDegistir(bool v) {
+    setState(() => _sadeceKpss = v);
+    _yukle();
+  }
+
+  void _favoriDegistir(bool v) {
+    setState(() => _sadeceFavori = v);
+    _yukle();
+  }
+
+  void _filtreleriTemizle() {
+    setState(() {
+      _arama = '';
+      _sadeceYeni = false;
+      _sadeceKpss = false;
+      _sadeceFavori = false;
+    });
+    _yukle();
+  }
+
+  // ============================================================
+  // FAVORİ — ANINDA GÜNCELLE (liste yenilenmez)
+  // ============================================================
+  Future<void> _favoriToggle(Ilan ilan) async {
+    final eskiDeger = ilan.favoriMi;
+
+    // Optimistic update — anında UI'da göster
+    final yeniListe = _ilanlar.map((i) {
+      if (i.id == ilan.id) {
+        return Ilan(
+          id: i.id,
+          kurum: i.kurum,
+          baslik: i.baslik,
+          tarihIso: i.tarihIso,
+          bitIso: i.bitIso,
+          kpss: i.kpss,
+          kpssTurleri: i.kpssTurleri,
+          favori: eskiDeger ? 0 : 1,
+          yeni: i.yeni,
+          aktif: i.aktif,
+          link: i.link,
+          resim: i.resim,
+          notMetni: i.notMetni,
+          tarihGoster: i.tarihGoster,
+          bitGoster: i.bitGoster,
+          kalanGun: i.kalanGun,
+          kpssGoster: i.kpssGoster,
+        );
+      }
+      return i;
+    }).toList();
+
+    setState(() => _ilanlar = yeniListe);
+
+    // Sunucuya gönder
     final ok = await ApiService.favoriDegistir(ilan.id);
-    if (ok && mounted) {
-      await _yukle();
+
+    if (!mounted) return;
+
+    if (!ok) {
+      // Hata → eski hâline döndür
+      setState(() => _ilanlar = _ilanlar);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Favori güncellenemedi'),
+          duration: Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      // Basit geri alma: listeyi yeniden yükle
+      _yukle();
     }
   }
 
+  // ============================================================
+  // DETAYA GİT
+  // ============================================================
+  Future<void> _detayaGit(Ilan ilan) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => IlanDetayEkrani(ilan: ilan)),
+    );
+    // Geri dönünce favori değişmiş olabilir → sessizce yenile
+    if (mounted) _yukle();
+  }
+
+  // ============================================================
+  // BUILD
+  // ============================================================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Kariyer Kapısı Takip'),
-        centerTitle: false,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _yukle,
-            tooltip: 'Yenile',
-          ),
-        ],
-      ),
+      appBar: _appBar(context),
       body: Column(
         children: [
+          // ---- FİLTRE ÇUBUĞU ----
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-            child: TextField(
-              controller: _aramaCtrl,
-              decoration: InputDecoration(
-                hintText: 'Kurum veya başlıkta ara...',
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: _arama.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Icons.clear),
-                        onPressed: () {
-                          _aramaCtrl.clear();
-                          setState(() => _arama = '');
-                          _yukle();
-                        },
-                      )
-                    : null,
-                isDense: true,
-                filled: true,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide.none,
-                ),
-              ),
-              onSubmitted: (v) {
-                setState(() => _arama = v);
-                _yukle();
-              },
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.sm,
+            ),
+            child: FiltreCubugu(
+              arama: _arama,
+              sadeceYeni: _sadeceYeni,
+              sadeceKpss: _sadeceKpss,
+              sadeceFavori: _sadeceFavori,
+              onAramaChanged: _aramaDegistir,
+              onYeniChanged: _yeniDegistir,
+              onKpssChanged: _kpssDegistir,
+              onFavoriChanged: _favoriDegistir,
+              onTemizle: _filtreleriTemizle,
             ),
           ),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Row(
-              children: [
-                FilterChip(
-                  label: const Text('✨ Yeni'),
-                  selected: _sadeceYeni,
-                  onSelected: (v) {
-                    setState(() => _sadeceYeni = v);
-                    _yukle();
-                  },
-                ),
-                const SizedBox(width: 6),
-                FilterChip(
-                  label: const Text('📚 KPSS'),
-                  selected: _sadeceKpss,
-                  onSelected: (v) {
-                    setState(() => _sadeceKpss = v);
-                    _yukle();
-                  },
-                ),
-                const SizedBox(width: 6),
-                FilterChip(
-                  label: const Text('⭐ Favoriler'),
-                  selected: _sadeceFavori,
-                  onSelected: (v) {
-                    setState(() => _sadeceFavori = v);
-                    _yukle();
-                  },
+
+          // ---- YENİLENİYOR GÖSTERGESİ ----
+          if (_yenileniyor)
+            const Padding(
+              padding: EdgeInsets.only(top: AppSpacing.xs),
+              child: LinearProgressIndicator(minHeight: 2),
+            ),
+
+          // ---- LİSTE / DURUM ----
+          Expanded(child: _govde(context)),
+        ],
+      ),
+    );
+  }
+
+  // ============================================================
+  // APPBAR
+  // ============================================================
+  PreferredSizeWidget _appBar(BuildContext context) {
+    return AppBar(
+            title: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ---- LOGO ----
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.1),
+                  blurRadius: 4,
+                  offset: const Offset(0, 1),
                 ),
               ],
             ),
+            padding: const EdgeInsets.all(3),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: Image.asset(
+                'assets/images/image.png',
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => const Icon(
+                  Icons.check_circle,
+                  color: Color(0xFF2563EB),
+                  size: 24,
+                ),
+              ),
+            ),
           ),
-          const SizedBox(height: 8),
-          Expanded(child: _govde()),
+          const SizedBox(width: 10),
+          // ---- YAZI ----
+          const Text('Eşleş – Kamu İlanları ve KPSS'),
         ],
       ),
-    );
-  }
-
-  Widget _govde() {
-    if (_yukleniyor) {
-      return const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text('İlanlar yükleniyor...'),
-            SizedBox(height: 8),
-            Text(
-              '(İlk açılışta 20-50 saniye sürebilir)',
-              style: TextStyle(fontSize: 12, color: Colors.grey),
+      actions: [
+        PopupMenuButton<ThemeMode>(
+          icon: Icon(_temaIkon(widget.mevcutTema)),
+          tooltip: 'Tema',
+          onSelected: widget.onTemaDegistir,
+          itemBuilder: (_) => const [
+            PopupMenuItem(
+              value: ThemeMode.system,
+              child: ListTile(
+                leading: Icon(Icons.brightness_auto_rounded),
+                title: Text('Sistem'),
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+            PopupMenuItem(
+              value: ThemeMode.light,
+              child: ListTile(
+                leading: Icon(Icons.light_mode_rounded),
+                title: Text('Açık'),
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+            PopupMenuItem(
+              value: ThemeMode.dark,
+              child: ListTile(
+                leading: Icon(Icons.dark_mode_rounded),
+                title: Text('Koyu'),
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+              ),
             ),
           ],
         ),
-      );
+        IconButton(
+          icon: const Icon(Icons.refresh_rounded),
+          tooltip: 'Yenile',
+          onPressed: () => _yukle(),
+        ),
+      ],
+    );
+  }
+
+  IconData _temaIkon(ThemeMode m) => switch (m) {
+        ThemeMode.dark => Icons.dark_mode_rounded,
+        ThemeMode.light => Icons.light_mode_rounded,
+        ThemeMode.system => Icons.brightness_auto_rounded,
+      };
+
+  // ============================================================
+  // GÖVDE
+  // ============================================================
+  Widget _govde(BuildContext context) {
+    // 1) İlk yükleme
+    if (_ilkYukleme) {
+      return _YuklemeSkeleton();
     }
 
+    // 2) Hata
     if (_hata != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.error_outline, size: 64, color: Colors.red),
-              const SizedBox(height: 16),
-              Text(_hata!, textAlign: TextAlign.center),
-              const SizedBox(height: 16),
-              ElevatedButton.icon(
-                onPressed: _yukle,
-                icon: const Icon(Icons.refresh),
-                label: const Text('Tekrar Dene'),
-              ),
-            ],
-          ),
-        ),
+      return _HataEkrani(
+        mesaj: _hata!,
+        onTekrar: () => _yukle(ilkMi: true),
       );
     }
 
+    // 3) Boş liste
     if (_ilanlar.isEmpty) {
-      return const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.inbox, size: 64, color: Colors.grey),
-            SizedBox(height: 16),
-            Text('Bu filtreye uyan ilan yok'),
-          ],
-        ),
+      final filtreVar = _arama.isNotEmpty ||
+          _sadeceYeni ||
+          _sadeceKpss ||
+          _sadeceFavori;
+
+      return _BosEkrani(
+        filtreVar: filtreVar,
+        onTemizle: _filtreleriTemizle,
       );
     }
 
+    // 4) Liste
     return RefreshIndicator(
-      onRefresh: _yukle,
+      onRefresh: () => _yukle(),
+      color: AppColors.mavi,
       child: ListView.separated(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.md, 0, AppSpacing.md, AppSpacing.xl,
+        ),
         itemCount: _ilanlar.length,
-        separatorBuilder: (_, _) => const SizedBox(height: 8),
-        itemBuilder: (context, i) => _ilanKarti(_ilanlar[i]),
+        separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.sm),
+        itemBuilder: (context, i) {
+          final ilan = _ilanlar[i];
+          return IlanKarti(
+            ilan: ilan,
+            onTap: () => _detayaGit(ilan),
+            onFavori: () => _favoriToggle(ilan),
+          );
+        },
       ),
     );
   }
+}
 
-  Widget _ilanKarti(Ilan ilan) {
-    return Card(
-      elevation: 1,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: InkWell(
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => IlanDetayEkrani(ilan: ilan)),
-        ).then((_) => _yukle()),
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+// ============================================================
+// YARDIMCI EKRANLAR
+// ============================================================
+
+class _YuklemeSkeleton extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return ListView.separated(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      itemCount: 6,
+      separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.sm),
+      itemBuilder: (_, _) => _SkeletonKart(),
+    );
+  }
+}
+
+class _SkeletonKart extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final renk = scheme.onSurface.withValues(alpha: 0.06);
+
+    Widget kutu({double? w, double h = 12, double r = 6}) => Container(
+          width: w,
+          height: h,
+          decoration: BoxDecoration(
+            color: renk,
+            borderRadius: BorderRadius.circular(r),
+          ),
+        );
+
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        border: Border.all(color: scheme.outline.withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      ilan.kurum,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey,
-                        fontWeight: FontWeight.w500,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  if (ilan.yeniMi)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.shade100,
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: const Text(
-                        'YENİ',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: Colors.blue,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  IconButton(
-                    icon: Icon(
-                      ilan.favoriMi ? Icons.star : Icons.star_border,
-                      color: ilan.favoriMi ? Colors.amber : Colors.grey,
-                      size: 20,
-                    ),
-                    onPressed: () => _favoriDegistir(ilan),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                ilan.baslik,
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 6,
-                runSpacing: 4,
-                children: [
-                  if (ilan.tarihGoster.isNotEmpty)
-                    _chip(Icons.calendar_today, ilan.tarihGoster, Colors.blueGrey),
-                  if (ilan.bitGoster.isNotEmpty)
-                    _chip(Icons.timer_outlined, ilan.bitGoster, Colors.orange),
-                  if (ilan.kalanGun != null && ilan.kalanGun! >= 0)
-                    _chip(Icons.hourglass_bottom, '${ilan.kalanGun} gün', Colors.red),
-                  if (ilan.kpssTurleri.isNotEmpty)
-                    _chip(Icons.school, 'KPSS ${ilan.kpssTurleri}', Colors.green),
-                ],
-              ),
+              Expanded(child: kutu(w: 120, h: 10)),
+              const SizedBox(width: 8),
+              kutu(w: 40, h: 16, r: 8),
             ],
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _chip(IconData ikon, String metin, Color renk) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: renk.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(ikon, size: 12, color: renk),
-          const SizedBox(width: 4),
-          Text(
-            metin,
-            style: TextStyle(fontSize: 11, color: renk, fontWeight: FontWeight.w500),
+          const SizedBox(height: 12),
+          kutu(w: double.infinity, h: 16),
+          const SizedBox(height: 6),
+          kutu(w: 200, h: 16),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              kutu(w: 90, h: 22, r: 8),
+              const SizedBox(width: 6),
+              kutu(w: 110, h: 22, r: 8),
+            ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _HataEkrani extends StatelessWidget {
+  final String mesaj;
+  final VoidCallback onTekrar;
+
+  const _HataEkrani({required this.mesaj, required this.onTekrar});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.xl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(AppSpacing.lg),
+              decoration: BoxDecoration(
+                color: AppColors.kirmizi.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.cloud_off_rounded,
+                size: 48,
+                color: AppColors.kirmizi,
+              ),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            const Text(
+              'Bağlantı sorunu',
+              style: AppText.h2,
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              mesaj,
+              textAlign: TextAlign.center,
+              style: AppText.body.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: AppSpacing.xl),
+            ElevatedButton.icon(
+              onPressed: onTekrar,
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text('Tekrar Dene'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _BosEkrani extends StatelessWidget {
+  final bool filtreVar;
+  final VoidCallback onTemizle;
+
+  const _BosEkrani({required this.filtreVar, required this.onTemizle});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.xl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(AppSpacing.lg),
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerHighest,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                filtreVar ? Icons.filter_alt_off_rounded : Icons.inbox_rounded,
+                size: 48,
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            Text(
+              filtreVar ? 'Sonuç bulunamadı' : 'Henüz ilan yok',
+              style: AppText.h2,
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              filtreVar
+                  ? 'Arama veya filtrelerinizi değiştirmeyi deneyin.'
+                  : 'Yeni ilanlar geldiğinde burada görünecek.',
+              textAlign: TextAlign.center,
+              style: AppText.body.copyWith(color: scheme.onSurfaceVariant),
+            ),
+            if (filtreVar) ...[
+              const SizedBox(height: AppSpacing.xl),
+              OutlinedButton.icon(
+                onPressed: onTemizle,
+                icon: const Icon(Icons.refresh_rounded),
+                label: const Text('Filtreleri Temizle'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.mavi,
+                  side: const BorderSide(color: AppColors.mavi),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.xl, vertical: AppSpacing.md,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }

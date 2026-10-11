@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
-        android:label="kariyer_app"
+        android:label="Eşleş – Kamu İlanları ve KPSS"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
